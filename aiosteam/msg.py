@@ -1,8 +1,8 @@
 import struct
 
-from steam.protobufs import steammessages_base_pb2
-from steam.protobufs import steammessages_clientserver_pb2
-from steam.protobufs import steammessages_clientserver_2_pb2
+from aiosteam.protobufs import steammessages_base_pb2
+from aiosteam.protobufs import steammessages_clientserver_pb2
+from aiosteam.protobufs import steammessages_clientserver_2_pb2
 
 from .enums import EUniverse, EResult
 from .enums.emsg import EMsg

@@ -385,7 +385,6 @@ class SteamClient(object):
         if self.logged_on:
             await self.send(resp)
             self.login_key = req.body.login_key
-            open("user.login_key", "w").write(self.login_key)
 
 
     async def onEMsgClientLogOnResponse(self, resp):
@@ -441,8 +440,6 @@ class SteamClient(object):
                 "cubwrote": req.body.cubtowrite,
                 }
             }
-        open("user.sentry", "wb").write(self.sentry)
-        open("user.sentry.sha_sentryfile", "wb").write(self.sha_sentryfile)
         await self.send(resp)
 
 

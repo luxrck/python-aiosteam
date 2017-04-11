@@ -13,8 +13,8 @@ from google.protobuf import descriptor_pb2
 _sym_db = _symbol_database.Default()
 
 
-import steam.protobufs.steammessages_base_pb2 as steammessages__base__pb2
-import steam.protobufs.encrypted_app_ticket_pb2 as encrypted__app__ticket__pb2
+import aiosteam.protobufs.steammessages_base_pb2 as steammessages__base__pb2
+import aiosteam.protobufs.encrypted_app_ticket_pb2 as encrypted__app__ticket__pb2
 
 
 DESCRIPTOR = _descriptor.FileDescriptor(
