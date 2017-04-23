@@ -13,12 +13,12 @@ from socket import socket, inet_aton
 from urllib.parse import urlencode
 
 import asyncio
-from asyncio import wait_for
+from asyncio import wait_for, ensure_future
 
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 
-import aiohttp
+from aiohttp import ClientSession
 
 from .enums import *
 from .enums.emsg import EMsg
@@ -99,12 +99,14 @@ class SteamClient(object):
 
         self._channel_encrypt_key = None
         self._channel_encrypt_hmac= None
+
         self._loop = loop or asyncio.get_event_loop()
-        self._session = None
+        self._session = ClientSession(loop=self._loop)
         # self._loop.set_debug(enabled=True)
         self._proto = proto
         self._connection = None
         self._heartbeat = None
+        self._jobid = 0
 
         self.__listeners__ = {}
         self.__waiting__ = {}
@@ -125,30 +127,37 @@ class SteamClient(object):
         return wrap
 
 
-    async def emit(self, event, resp=None):
-        if type(event) == int: event = EMsg(event)
-        if type(event) == EMsg: event = event.name
-        for cb in [getattr(self, 'on'+event, None), getattr(self, "onEMsg"+event, None)] + \
-                  list(self.__listeners__.get(event, [])):
-            if not cb: continue
-            r = cb(resp)
-            if asyncio.iscoroutine(r): r = await r
+    def emit(self, event, resp=None):
+        async def __emit__(self, event, resp):
+            if type(event) == int: event = EMsg(event)
+            if type(event) == EMsg: event = event.name
+            for cb in [getattr(self, 'on'+event, None), getattr(self, "onEMsg"+event, None)] + \
+                      list(self.__listeners__.get(event, [])):
+                if not cb: continue
+                r = cb(resp)
+                if asyncio.iscoroutine(r): r = await r
+            # print("emit:", event)
+            listeners = self.__waiting__.get(event, set())
 
-        listeners = self.__waiting__.get(event, set())
+            while listeners:
+                w = listeners.pop()
+                w.set_result(resp or event)
+        return ensure_future(self._loop.create_task(__emit__(self, event, resp)))
 
-        while listeners:
-            w = listeners.pop()
-            w.set_result(resp or event)
+
+    async def jobid(self):
+        jobid, self._jobid = self._jobid, (self._jobid + 1) % 100000
+        return jobid
 
 
-    async def ready(self, event, packet=None):
+    async def ready(self, event, packet=None, timeout=30):
         if type(event) == EMsg: event = event.name
         self.__waiting__.setdefault(event, set())
         future = asyncio.Future(loop=self._loop)
         self.__waiting__[event].add(future)
         if packet:
             await self.send(packet)
-        return (await future)
+        return (await wait_for(future, timeout=timeout))
 
 
     async def recv(self):
@@ -158,6 +167,7 @@ class SteamClient(object):
             m ="hmac" if self._channel_encrypt_hmac else "base"
             s = crypto.decrypt(s, self._channel_encrypt_key, self._channel_encrypt_hmac, m)
         r = msg.loads(s)
+        # print("recv:", r.msg)
         return r
 
 
@@ -179,7 +189,7 @@ class SteamClient(object):
                 try:
                     r = await self.recv()
                     if not r: (await asyncio.sleep(0.1)); continue
-                    self._loop.create_task(self.emit(r.msg.name, r))
+                    self.emit(r.msg.name, r)
                 except Exception as e:
                     await asyncio.sleep(0.2)
         async def __switch__():
@@ -272,7 +282,7 @@ class SteamClient(object):
 
     async def servers(self, cellid=0, maxcount=4):
         url = "http://api.steampowered.com/ISteamDirectory/GetCMList/v0001/?cellid=%d&maxcount=%d" % (cellid, maxcount)
-        r = await aiohttp.get(url)
+        r = await self._session.get(url)
         j = await r.json()
         return j.get("response", {}).get("serverlist", [])
 
@@ -288,8 +298,21 @@ class SteamClient(object):
         await self.send(packet)
 
 
+    async def register_key(self, key):
+        packet = {
+            "msg": EMsg.ClientRegisterKey,
+            "body": {
+                "key": key,
+                }
+            }
+        resp = await self.ready(event=EMsg.ClientPurchaseResponse, packet=packet)
+        return resp
+
+
     async def session(self, refresh=False):
         if self._session and not refresh: return self._session
+        if not self._session: self._session = ClientSession()
+
         key, encrypted_key = crypto.session_key()
         auth_packet = {
             "steamid": self.steamid,
@@ -303,7 +326,7 @@ class SteamClient(object):
         headers = {
             "Content-Type": "application/x-www-form-urlencoded"
             }
-        auth_resp = await aiohttp.post(steamuserauth_uri, data=data, headers=headers)
+        auth_resp = await self._session.post(steamuserauth_uri, data=data, headers=headers)
         auth_json = await auth_resp.json()
 
         sessionid = binascii.hexlify(sha1(os.urandom(32)).digest())[:32].decode('ascii')
@@ -315,7 +338,8 @@ class SteamClient(object):
             "steamLoginSecure": auth_json['authenticateuser']['tokensecure'],
             }
 
-        session = aiohttp.ClientSession(cookies=cookies, loop=self._loop)
+        # session = aiohttp.ClientSession(cookies=cookies, loop=self._loop)
+        self._session.cookie_jar.update_cookies(cookies)
 
         async def api_key(self):
             url = "http://steamcommunity.com/dev/apikey"
@@ -324,19 +348,18 @@ class SteamClient(object):
             return re.search("[A-Z0-9]{32}", t)[0]
 
         if not self.api_key:
-            self.api_key = await api_key(session)
-        if not self.api_key: session.close(); return None
-        self._session = session
-        return session
+            self.api_key = await api_key(self._session)
+        if not self.api_key: self._session.close(); self._session = None; return None
+        return self._session
 
 
     async def games(self):
-        if not self.api_key: await self.session()
+        if not self.api_key: await self.session(True)
         if not self.api_key: return {}
         url = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key={}&steamid={}&include_appinfo=1"
         url = url.format(self.api_key, self.steamid)
         try:
-            r = await aiohttp.get(url)
+            r = await (await self.session()).get(url)
             t = await r.json()
         except Exception as e:
             return {}
@@ -371,6 +394,7 @@ class SteamClient(object):
         while len(data) > 0:
             size, = struct.unpack_from("<I", data)
             r = msg.loads(data[4:4+size])
+            # print("multi:", r.msg)
             await self.emit(r.msg, r)
             data = data[4+size:]
 
@@ -406,6 +430,7 @@ class SteamClient(object):
                         await self.send(packet)
                     except:
                         pass
+
             self._heartbeat = self._loop.create_task(__heartbeat__(interval))
 
             # set client persona state

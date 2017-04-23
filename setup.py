@@ -12,7 +12,7 @@ setup(name='aiosteam',
       install_requires=[
         "aiohttp",
         "pycrypto",
-        "protobuf"
+        "protobuf",
         ],
       include_package_data=True,
       license="MIT License",

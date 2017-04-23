@@ -58,8 +58,8 @@ class MessageHeader(object):
     msg = EMsg.Invalid
     size = 0
     version = 2
-    target_jobid = -1
-    source_jobid = -1
+    jobid_target = -1
+    jobid_source = -1
     header_canary = 239
     steamid = -1
     client_sessionid = -1
@@ -70,13 +70,13 @@ class MessageHeader(object):
         self.size = 20 if not extended else 36
     def SerializeToString(self):
         if not self.extended:
-            return struct.pack(self.packstr, self.msg, self.target_jobid, self.source_jobid)
+            return struct.pack(self.packstr, self.msg, self.jobid_target, self.jobid_source)
         return struct.pack(self.packstr,
                            self.msg,
                            self.size,
                            self.version,
-                           self.target_jobid,
-                           self.source_jobid,
+                           self.jobid_target,
+                           self.jobid_source,
                            self.header_canary,
                            self.steamid,
                            self.client_sessionid)
@@ -85,14 +85,14 @@ class MessageHeader(object):
             (msg,
              self.size,
              self.version,
-             self.target_jobid,
-             self.source_jobid,
+             self.jobid_target,
+             self.jobid_source,
              self.header_canary,
              self.steamid,
              self.client_sessionid,
              ) = struct.unpack_from(self.packstr, s)
         else:
-            msg, self.target_jobid, self.source_jobid = struct.unpack_from(self.packstr, s)
+            msg, self.jobid_target, self.jobid_source = struct.unpack_from(self.packstr, s)
         if self.extended and (self.size != 36 or self.version != 2):
             raise RuntimeError("MessageHeader parse failed.")
         self.msg = EMsg(msg)
